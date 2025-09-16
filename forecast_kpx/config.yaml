@@ -1,0 +1,73 @@
+# Configuration for KPX Solar Energy Forecasting
+data:
+  # KPX solar energy data files
+  kpx_original: "data/solarenergy2.csv"  # Original solar generation data
+  kpx_anomaly_base: "data/solarenergy2_daily_anomaly_base_only.csv"  # Base anomaly data
+  kpx_anomaly_detrended: "data/solarenergy2_daily_anomaly_detrended.csv"  # Detrended anomaly data
+  era5_path: "data/era5_*.nc"  # Path pattern for ERA5 NetCDF files
+  
+  # Geographic bounds
+  extended_bbox:
+    lat_min: -10
+    lat_max: 60
+    lon_min: 60
+    lon_max: 250  # 110W in 0-360 format
+    
+  korea_bbox:
+    lat_min: 33
+    lat_max: 39.5
+    lon_min: 124
+    lon_max: 132
+
+# Time periods
+timeframe:
+  start: "2017-01-01"
+  end: "2021-12-31"
+  train_end: "2019-12-31"
+  val_end: "2020-12-31"
+  test_end: "2021-12-31"
+  
+  # Known bad data window to exclude from baseline fitting
+  bad_window:
+    start: "2020-03-15"
+    end: "2020-04-15"
+
+# Model parameters
+models:
+  baseline:
+    linear_features: ["gen_lag1", "gen_lag2", "gen_lag3", "gen_lag7", 
+                     "ssrd_kr_lag1", "tcc_kr_lag1", "sinDoy", "cosDoy"]
+    
+  random_forest:
+    n_estimators: 500
+    max_features: "sqrt"
+    random_state: 42
+    n_jobs: -1
+    
+    # For extended grid mode
+    pca_components: 10  # Per variable
+    grid_downsample: 2  # Every Nth grid point
+
+# Feature engineering
+features:
+  lags:
+    energy: [1, 2, 3, 7]  # Days
+    meteo: [1, 2, 3]     # Days
+    
+  calendar:
+    include_dow: true
+    include_seasonal: true
+
+# Output paths
+outputs:
+  correlation_maps: "outputs/correlation_maps"
+  features: "outputs/features"
+  models: "outputs/models"
+  metrics: "outputs/metrics"
+  plots: "outputs/plots"
+
+# Memory management (for Google Colab)
+memory:
+  max_memory_gb: 8
+  use_pca_extended: true
+  grid_downsample_extended: true

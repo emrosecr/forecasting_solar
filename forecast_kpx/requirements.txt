@@ -1,0 +1,34 @@
+# Core data science libraries
+pandas>=1.5.0
+numpy>=1.21.0
+xarray>=2022.6.0
+scipy>=1.9.0
+
+# Machine learning
+scikit-learn>=1.1.0
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+cartopy>=0.21.0
+
+# Geospatial and climate data
+netCDF4>=1.6.0
+h5py>=3.7.0
+zarr>=2.12.0
+
+# Configuration and utilities
+PyYAML>=6.0
+tqdm>=4.64.0
+
+# Optional: for enhanced performance
+numba>=0.56.0
+dask>=2022.8.0
+
+# Jupyter notebook support (for Google Colab)
+jupyter>=1.0.0
+ipykernel>=6.15.0
+
+# File I/O
+openpyxl>=3.0.0  # For Excel file support if needed
+pyarrow>=8.0.0   # For Parquet file support
