@@ -16,7 +16,7 @@ sys.path.append('src')
 # Import custom modules
 from io_load import load_kpx, load_kpx_multi_file, create_korea_and_extended_datasets
 from anomalies import daily_doy_anom_detrended, create_targets
-from corr_maps import create_correlation_maps
+from corr_maps import create_correlation_maps, correlate_boxed_series
 from features import create_feature_sets, save_features
 from models_baseline import run_baseline_models
 from models_rf_grid import run_random_forest_models
@@ -178,6 +178,15 @@ def run_demo():
         )
         print(f"✓ Correlation maps created")
         print(f"  Pearson range: {pearson_corr.min().values:.3f} to {pearson_corr.max().values:.3f}")
+        # Boxed series correlations (with synthetic capacities)
+        from io_load import build_boxed_climate_series
+        raw_boxed, anom_boxed = build_boxed_climate_series(ds_korea, {
+            'timeframe': config['timeframe'],
+            'sites': {'box_half_deg': 0.5},
+            'data': {'kpx_original': 'data/solarenergy2.csv'}
+        })
+        correlate_boxed_series(anom_series, anom_boxed)
+        print("✓ Boxed series correlation summary created")
     except Exception as e:
         print(f"✗ Correlation analysis failed: {e}")
     

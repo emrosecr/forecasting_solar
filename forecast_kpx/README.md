@@ -248,6 +248,30 @@ For interactive analysis, use the notebooks:
 - **Importance**: Feature importance for Random Forest models
 - **Correlation maps**: Spatial correlation patterns
 
+## Three-Site Box Mode (Area-Weighted + Capacity-Weighted)
+
+This mode aligns climate drivers with the physical aggregation of KPX generation across three named PV sites:
+
+- Per-site boxes: One fixed-size square box (configurable half-side, default 0.5°) around each site:
+  - `안산연성정수장태양광`
+  - `세종시폐기물내립장태양광`
+  - `영암에프원태양광`
+- Within each box, daily climate variables are computed as area-weighted means (cos(latitude) weights). Intensive variables are averaged (e.g., `ssrd_sum`, `t2m`, `wind10`, `tcc`).
+- Cross-site combine: Per-site series are combined to a single daily climate driver using capacity-weighted mean (weights from KPX `solarenergy2.csv`; falls back to equal if unavailable).
+- Two forecasting tracks are supported for the combined driver:
+  - Climate-total: capacity-weighted daily means (no detrending)
+  - Climate-anom: detrended/DOY anomalies using the same exclusion window used for generation anomalies
+
+Outputs added:
+- `outputs/features/local/boxed_features.parquet` (both total and anomaly columns)
+- `outputs/correlation_maps/boxed_correlation_summary.csv`
+- `outputs/plots/boxed_corr_[VAR].png`
+
+Integration points (no CLI changes):
+- Correlations: Series-level correlations between generation anomaly and boxed climate anomalies run before spatial maps.
+- Features: Local feature set now includes boxed drivers (total + anomaly) and their lags alongside existing calendar/energy lags.
+- Models: Both baseline and RF consume the augmented local features; extended features path remains unchanged.
+
 ## Memory Management
 
 The code is optimized for Google Colab with:

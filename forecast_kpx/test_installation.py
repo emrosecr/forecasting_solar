@@ -153,7 +153,7 @@ def test_basic_functionality():
         anom_df = daily_doy_anom_detrended(gen_series)
         print("✓ Anomaly calculation")
         
-        # Test feature creation
+        # Test feature creation and boxed climate smoke
         lats = np.linspace(33, 39.5, 5)
         lons = np.linspace(124, 132, 5)
         ssrd_data = xr.DataArray(
@@ -162,6 +162,35 @@ def test_basic_functionality():
             dims=['time', 'lat', 'lon']
         )
         print("✓ XArray data creation")
+
+        # Build minimal dataset and run boxed flow
+        ds_korea = xr.Dataset({'ssrd_sum': ssrd_data})
+        sys.path.append('src')
+        from io_load import build_boxed_climate_series
+        # Minimal config
+        config = {
+            'timeframe': {
+                'bad_window': {
+                    'start': '2020-03-15',
+                    'end': '2020-04-15'
+                }
+            },
+            'sites': {
+                'box_half_deg': 0.5
+            },
+            'data': {
+                'kpx_original': 'data/solarenergy2.csv'
+            }
+        }
+        raw_df, anom_df = build_boxed_climate_series(ds_korea, config)
+        assert raw_df.shape[0] == len(dates)
+        print("✓ Boxed climate series (raw + anomaly)")
+        
+        # Boxed correlation summary (smoke)
+        from corr_maps import correlate_boxed_series
+        anom = anom_df.iloc[:, 0] if anom_df.shape[1] > 0 else pd.Series(np.random.randn(len(dates)), index=dates)
+        correlate_boxed_series(anom, anom_df)
+        print("✓ Boxed correlation summary")
         
         return True
         

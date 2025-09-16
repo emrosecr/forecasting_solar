@@ -9,15 +9,16 @@ import argparse
 import yaml
 import pandas as pd
 import numpy as np
+import xarray as xr
 from pathlib import Path
 
 # Add src to path
 sys.path.append('src')
 
 # Import custom modules
-from io_load import load_kpx, load_kpx_multi_file, create_korea_and_extended_datasets, check_data_availability
+from io_load import load_kpx, load_kpx_multi_file, create_korea_and_extended_datasets, check_data_availability, build_boxed_climate_series
 from anomalies import daily_doy_anom_detrended, create_targets
-from corr_maps import create_correlation_maps, create_correlation_summary
+from corr_maps import create_correlation_maps, create_correlation_summary, correlate_boxed_series
 from features import create_feature_sets, save_features
 from models_baseline import run_baseline_models
 from models_rf_grid import run_random_forest_models
@@ -122,13 +123,21 @@ def load_data(config):
     return gen_series, anom_base_series, anom_detrended_series, ds_korea, ds_extended
 
 
-def run_correlation_analysis(gen_series, ds_extended, anom_series, config):
+def run_correlation_analysis(gen_series, ds_korea, ds_extended, anom_series, config):
     """Run correlation analysis."""
     print("\n" + "="*60)
     print("CORRELATION ANALYSIS")
     print("="*60)
     
     try:
+        # 1) Boxed series correlations (series-to-series)
+        try:
+            raw_boxed, anom_boxed = build_boxed_climate_series(ds_korea, config)
+            correlate_boxed_series(anom_series, anom_boxed, output_dir=config['outputs']['correlation_maps'])
+        except Exception as e:
+            print(f"! Boxed series correlation step skipped: {e}")
+        
+        # 2) Spatial correlation maps (existing path)
         # Extract SSRD data
         ssrd_data = ds_extended['ssrd_sum']
         
@@ -327,7 +336,7 @@ def main():
         # Correlation analysis
         if not args.skip_correlations:
             pearson_corr, spearman_corr = run_correlation_analysis(
-                gen_series, ds_extended, anom_series, config
+                gen_series, ds_korea, ds_extended, anom_series, config
             )
         
         # Baseline training
