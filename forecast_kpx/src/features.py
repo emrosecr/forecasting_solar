@@ -83,6 +83,31 @@ def create_local_features(ds_korea: xr.Dataset, config: dict) -> pd.DataFrame:
     return features
 
 
+def _create_boxed_climate_features(ds_korea: xr.Dataset, config: dict) -> pd.DataFrame:
+    """
+    Create capacity-weighted boxed climate drivers (total + anomaly variants).
+    Returns a DataFrame indexed by date with columns like:
+      - ssrd_sum_boxed, t2m_boxed, wind10_boxed, tcc_boxed
+      - ssrd_sum_boxed_anom, t2m_boxed_anom, wind10_boxed_anom, tcc_boxed_anom
+    Also saves parquet at outputs/features/local/boxed_features.parquet.
+    """
+    from .io_load import build_boxed_climate_series
+    raw_df, anom_df = build_boxed_climate_series(ds_korea, config)
+
+    # Merge raw and anomaly with consistent names
+    out = pd.DataFrame(index=raw_df.index)
+    for col in raw_df.columns:
+        out[col] = raw_df[col]
+    for col in anom_df.columns:
+        out[col] = anom_df[col]
+
+    # Save artifact
+    import os
+    os.makedirs("outputs/features/local", exist_ok=True)
+    out.to_parquet("outputs/features/local/boxed_features.parquet")
+    return out
+
+
 def create_extended_features(ds_extended: xr.Dataset, config: dict,
                            train_mask: pd.Series) -> pd.DataFrame:
     """
@@ -325,6 +350,9 @@ def add_lag_features(features: pd.DataFrame, energy_series: pd.Series,
     # Meteorological lags
     meteo_lags = lag_config.get('meteo', [1, 2, 3])
     meteo_vars = ['ssrd_kr_sum', 'tcc_kr', 'tcwv_kr', 'wind10_kr', 't2m_kr']
+    # Include boxed drivers (both total and anomaly variants)
+    boxed_vars = [c for c in meteo_features.columns if c.endswith('_boxed') or c.endswith('_boxed_anom')]
+    meteo_vars += boxed_vars
     
     for var in meteo_vars:
         if var in meteo_features.columns:
@@ -360,6 +388,18 @@ def create_feature_sets(gen_series: pd.Series, ds_korea: xr.Dataset,
     """
     # Create base local features
     X_local = create_local_features(ds_korea, config)
+
+    # Inject boxed climate drivers
+    try:
+        boxed = _create_boxed_climate_features(ds_korea, config)
+        # Select variables to include as local drivers
+        boxed_total_cols = [c for c in boxed.columns if c.endswith('_boxed')]
+        boxed_anom_cols = [c for c in boxed.columns if c.endswith('_boxed_anom')]
+        # Combine into X_local
+        for c in boxed_total_cols + boxed_anom_cols:
+            X_local[c] = boxed[c].reindex(X_local.index)
+    except Exception as e:
+        warnings.warn(f"Boxed climate feature creation failed: {e}")
     
     # Create extended features
     X_extended = create_extended_features(ds_extended, config, train_mask)
@@ -368,7 +408,7 @@ def create_feature_sets(gen_series: pd.Series, ds_korea: xr.Dataset,
     X_local = add_calendar_features(X_local, config)
     X_extended = add_calendar_features(X_extended, config)
     
-    # Add lag features
+    # Add lag features (including boxed columns now present in X_local)
     X_local = add_lag_features(X_local, gen_series, X_local, config)
     X_extended = add_lag_features(X_extended, gen_series, X_local, config)
     

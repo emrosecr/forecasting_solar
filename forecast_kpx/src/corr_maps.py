@@ -227,6 +227,70 @@ def create_correlation_maps(energy_anomalies: pd.Series, ssrd_data: xr.DataArray
     return pearson_corr, spearman_corr
 
 
+def correlate_boxed_series(gen_anom: pd.Series, climate_anom_df: pd.DataFrame,
+                           output_dir: str = "outputs/correlation_maps") -> pd.DataFrame:
+    """
+    Compute Pearson and Spearman correlations between generation anomaly and
+    capacity-weighted climate anomalies (series-to-series, no maps).
+
+    Saves a CSV summary and per-variable scatter plots.
+
+    Output:
+      - outputs/correlation_maps/boxed_correlation_summary.csv
+      - outputs/plots/boxed_corr_[VAR].png
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    plots_dir = os.path.join("outputs", "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+
+    variables = list(climate_anom_df.columns)
+    records = []
+
+    for var in variables:
+        x = climate_anom_df[var]
+        # Align indices and drop NaN
+        common_idx = gen_anom.index.intersection(x.index)
+        y = gen_anom.loc[common_idx]
+        x = x.loc[common_idx]
+        valid = ~(x.isna() | y.isna())
+        x_valid = x[valid]
+        y_valid = y[valid]
+        if len(x_valid) < 3:
+            pearson = np.nan
+            spearman = np.nan
+        else:
+            pearson = np.corrcoef(x_valid, y_valid)[0, 1]
+            spearman = spearmanr(x_valid, y_valid).correlation
+
+        records.append({
+            'variable': var,
+            'pearson': pearson,
+            'spearman': spearman,
+            'n': int(valid.sum())
+        })
+
+        # Scatter plot
+        try:
+            plt.figure(figsize=(6, 5))
+            plt.scatter(x_valid, y_valid, alpha=0.6, s=12)
+            plt.title(f"Boxed Corr: {var}\nPearson={pearson:.3f}, Spearman={spearman:.3f}")
+            plt.xlabel(var)
+            plt.ylabel('gen_anom')
+            plot_path = os.path.join(plots_dir, f"boxed_corr_{var}.png")
+            plt.tight_layout()
+            plt.savefig(plot_path, dpi=200, bbox_inches='tight')
+            plt.close()
+        except Exception:
+            pass
+
+    summary_df = pd.DataFrame.from_records(records)
+    csv_path = os.path.join(output_dir, 'boxed_correlation_summary.csv')
+    summary_df.to_csv(csv_path, index=False)
+    print(f"Saved boxed correlation summary: {csv_path}")
+
+    return summary_df
+
+
 def analyze_correlation_patterns(corr_map: xr.DataArray, threshold: float = 0.3) -> dict:
     """
     Analyze correlation patterns and identify key regions.

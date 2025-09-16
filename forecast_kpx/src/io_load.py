@@ -6,7 +6,7 @@ Handles loading KPX generation data and ERA5 meteorological data.
 import pandas as pd
 import xarray as xr
 import numpy as np
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple, Optional, List, Dict
 import warnings
 
 
@@ -359,3 +359,212 @@ def check_data_availability(kpx_series: pd.Series, era5_ds: xr.Dataset,
     }
     
     return summary
+
+
+# ===== Three-Site Boxed Climate (Area-weighted per-site, Capacity-weighted combine) =====
+
+def _get_default_site_definitions() -> List[dict]:
+    """
+    Return default site definitions (approximate coordinates) for three named sites.
+    Names (Korean):
+      - 안산연성정수장태양광 (Ansan Water Treatment PV)
+      - 세종시폐기물내립장태양광 (Sejong Landfill PV)
+      - 영암에프원태양광 (Yeongam F1 PV)
+    """
+    return [
+        {
+            'name': '안산연성정수장태양광',
+            'lat': 37.30,
+            'lon': 126.80,
+        },
+        {
+            'name': '세종시폐기물내립장태양광',
+            'lat': 36.50,
+            'lon': 127.30,
+        },
+        {
+            'name': '영암에프원태양광',
+            'lat': 34.70,
+            'lon': 126.40,
+        },
+    ]
+
+
+def get_site_definitions(config: dict) -> List[dict]:
+    """
+    Get site definitions from config if provided, otherwise use defaults.
+
+    Expected config structure (optional):
+        config['sites']['boxes'] = [
+            {'name': '...', 'lat': float, 'lon': float}, ...
+        ]
+    """
+    sites_cfg = config.get('sites', {}).get('boxes')
+    if isinstance(sites_cfg, list) and len(sites_cfg) >= 3:
+        cleaned: List[dict] = []
+        for item in sites_cfg[:3]:
+            if all(k in item for k in ['name', 'lat', 'lon']):
+                cleaned.append({'name': item['name'], 'lat': float(item['lat']), 'lon': float(item['lon'])})
+        if len(cleaned) == 3:
+            return cleaned
+    return _get_default_site_definitions()
+
+
+def select_site_box(ds: xr.Dataset, lat_center: float, lon_center: float, half_side_deg: float) -> xr.Dataset:
+    """
+    Select a square box around a site with a fixed half-side in degrees.
+    Uses existing subset_bbox utility to handle lat ordering and lon wrapping.
+    """
+    north = lat_center + half_side_deg
+    south = lat_center - half_side_deg
+    west = (lon_center - half_side_deg) % 360
+    east = (lon_center + half_side_deg) % 360
+    return subset_bbox(ds, north=north, south=south, west_e=west, east_e=east)
+
+
+def area_weighted_time_series(da: xr.DataArray) -> pd.Series:
+    """
+    Compute area-weighted mean time series over lat/lon for a DataArray.
+    The weighting uses cosine of latitude; intensive variables are averaged (not summed).
+    """
+    # cosine(lat) weights across lat dimension; broadcast to lon
+    weights = np.cos(np.deg2rad(da['lat']))
+    ts = da.weighted(weights).mean(dim=['lat', 'lon'], skipna=True)
+    return ts.to_pandas()
+
+
+def compute_per_site_area_weighted_means(ds_korea: xr.Dataset, config: dict) -> Dict[str, pd.DataFrame]:
+    """
+    Compute per-site, per-variable area-weighted daily means inside fixed boxes.
+
+    Returns a dict mapping variable -> DataFrame with columns = site names, index = date.
+    Variables considered if present: ['ssrd_sum', 't2m', 'u10', 'v10', 'tcc'].
+    """
+    sites = get_site_definitions(config)
+    half_side = float(config.get('sites', {}).get('box_half_deg', 0.5))
+
+    var_list = [v for v in ['ssrd_sum', 't2m', 'u10', 'v10', 'tcc'] if v in ds_korea.data_vars]
+    per_var: Dict[str, pd.DataFrame] = {}
+
+    for var in var_list:
+        site_series: Dict[str, pd.Series] = {}
+        for site in sites:
+            ds_box = select_site_box(ds_korea[[var]], site['lat'], site['lon'], half_side)
+            ts = area_weighted_time_series(ds_box[var])
+            site_series[site['name']] = ts
+        # Align into a DataFrame
+        df = pd.DataFrame(site_series)
+        df.index.name = 'date'
+        per_var[var] = df
+
+    # Derived wind10 magnitude if u10 and v10 exist
+    if 'u10' in per_var and 'v10' in per_var:
+        u_df = per_var['u10']
+        v_df = per_var['v10']
+        wind_df = np.sqrt(u_df.pow(2) + v_df.pow(2))
+        wind_df.columns = u_df.columns
+        per_var['wind10'] = wind_df
+
+    return per_var
+
+
+def load_site_capacities_from_kpx(original_path: str, site_names: List[str]) -> pd.Series:
+    """
+    Attempt to load per-site capacities (MW) from the KPX original CSV.
+    Falls back to equal weights if capacities cannot be parsed.
+    Heuristics: look for columns like ['site','name'] and ['capacity_mw','capacity','설비용량'].
+    """
+    capacities = pd.Series(index=site_names, dtype=float)
+    try:
+        df = pd.read_csv(original_path)
+        cols_lower = {c: c.lower() for c in df.columns}
+        # Candidate name columns
+        name_cols = [c for c in df.columns if any(tok in cols_lower[c] for tok in ['site', 'name', '발전소', '설비명'])]
+        cap_cols = [c for c in df.columns if any(tok in cols_lower[c] for tok in ['capacity_mw', 'capacity', '설비용량', '용량'])]
+        if name_cols and cap_cols:
+            # Use the first matching pair; group by name and take max capacity
+            tmp = df[[name_cols[0], cap_cols[0]]].copy()
+            tmp.columns = ['name', 'capacity']
+            tmp['name'] = tmp['name'].astype(str)
+            # Aggregate capacities per site name
+            cap_map = tmp.groupby('name')['capacity'].max()
+            for sn in site_names:
+                # Exact match or contains
+                match = cap_map.filter(like=sn)
+                if sn in cap_map.index:
+                    capacities.loc[sn] = float(cap_map.loc[sn])
+                elif len(match) > 0:
+                    capacities.loc[sn] = float(match.iloc[0])
+        
+        # If still missing or invalid, fill with equal weights
+        if capacities.isna().any() or (capacities <= 0).any():
+            raise ValueError("Parsed capacities are incomplete or non-positive")
+    except Exception:
+        # Fallback: equal weights (1.0 MW each)
+        capacities = pd.Series(1.0, index=site_names)
+    capacities.name = 'capacity_mw'
+    return capacities
+
+
+def capacity_weighted_combine(per_site: Dict[str, pd.DataFrame], capacities_mw: pd.Series) -> Dict[str, pd.Series]:
+    """
+    Combine per-site series into capacity-weighted means per variable.
+    Returns dict var -> pd.Series.
+    """
+    combined: Dict[str, pd.Series] = {}
+    # Normalize weights to sum to 1
+    w = capacities_mw.reindex(capacities_mw.index).astype(float)
+    w = w / w.sum() if w.sum() != 0 else pd.Series(1.0 / len(w), index=w.index)
+
+    for var, df in per_site.items():
+        # Align columns to capacities index order
+        cols = [c for c in w.index if c in df.columns]
+        if len(cols) == 0:
+            continue
+        X = df[cols]
+        weights = w.loc[cols]
+        combined[var] = (X * weights.values).sum(axis=1)
+        combined[var].name = f"{var}_boxed"
+    return combined
+
+
+def build_boxed_climate_series(ds_korea: xr.Dataset, config: dict, kpx_original_path: Optional[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Build capacity-weighted combined climate series (raw and anomaly variants).
+    - Per-site area-weighted daily means inside fixed boxes
+    - Capacity-weighted combine across three sites
+    - Return two DataFrames (raw_total, anom_detrended) with aligned daily index
+    """
+    # Per-site area-weighted means
+    per_site = compute_per_site_area_weighted_means(ds_korea, config)
+
+    # Capacities from KPX original CSV or config
+    site_names = list(next(iter(per_site.values())).columns)
+    if kpx_original_path is None:
+        kpx_original_path = config.get('data', {}).get('kpx_original', '')
+    capacities = load_site_capacities_from_kpx(kpx_original_path, site_names)
+
+    # Capacity-weighted combine
+    combined = capacity_weighted_combine(per_site, capacities)
+
+    # Assemble raw total DataFrame
+    raw_df = pd.DataFrame(combined)
+    raw_df.index.name = 'date'
+
+    # Create anomalies using same settings as generation anomalies
+    from anomalies import daily_doy_anom_detrended
+    bad_window_cfg = config.get('timeframe', {}).get('bad_window', None)
+    exclude = None
+    if bad_window_cfg:
+        exclude = (bad_window_cfg.get('start'), bad_window_cfg.get('end'))
+
+    anom_cols: Dict[str, pd.Series] = {}
+    for col in raw_df.columns:
+        res = daily_doy_anom_detrended(raw_df[col], exclude=exclude)
+        anom = res['anom_detrended']
+        anom.name = f"{col}_anom"
+        anom_cols[anom.name] = anom
+    anom_df = pd.DataFrame(anom_cols)
+    anom_df.index.name = 'date'
+
+    return raw_df, anom_df
